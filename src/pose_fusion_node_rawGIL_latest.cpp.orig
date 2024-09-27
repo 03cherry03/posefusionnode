@@ -1,0 +1,209 @@
+#include <rclcpp/rclcpp.hpp>  
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp> 
+#include <geometry_msgs/msg/twist_stamped.hpp>  
+#include <sensor_msgs/msg/imu.hpp>  
+#include <tf2_ros/transform_broadcaster.h>  
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>  
+#include <tf2/LinearMath/Quaternion.h> 
+#include <Eigen/Dense>  
+#include <cmath> 
+#include <string>
+#include <sstream>
+#include <iomanip>
+#include <memory>  
+
+class PoseFusionNode : public rclcpp::Node
+{
+public:
+    PoseFusionNode()
+        : Node("pose_fusion_node")
+    {
+        // Subscribers for LiDAR and GNSS pose
+        lidar_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+            "/localization/pose_with_covariance", 10,
+            std::bind(&PoseFusionNode::lidarPoseCallback, this, std::placeholders::_1));
+
+        gnss_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+            "/mgrs_pose", 10,
+            std::bind(&PoseFusionNode::gnssPoseCallback, this, std::placeholders::_1));
+
+        // IMU data subscriber
+        imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
+            "/imu/data", 10,
+            std::bind(&PoseFusionNode::imuCallback, this, std::placeholders::_1));
+
+        // Publisher for raw GNSS + IMU fusion result
+        gnss_imu_fusion_pub_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/gnss_imu_fused_pose", 10);
+
+        // Publisher for raw GNSS + IMU fusion twist result
+        twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/gnss_imu_fused_twist", 10);
+
+        // Publisher for final fused pose (GNSS + IMU + LiDAR)
+        final_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/final/pose_with_covariance", 10);
+
+        // Initialize the transform broadcaster
+        tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+    }
+
+private:
+    void lidarPoseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr lidar_msg)
+    {
+        last_lidar_msg_ = lidar_msg;
+
+        if (last_gnss_fused_pose_)  // last_gnss_fused_pose_가 선언되어야 함
+        {
+            fusePoses();  // fusePoses 함수가 정의되어야 함
+        }
+    }
+
+    void gnssPoseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr gnss_msg)
+    {
+        last_gnss_fused_pose_ = gnss_msg;  // GNSS 데이터를 업데이트
+
+        if (last_lidar_msg_)
+        {
+            fusePoses();  // GNSS와 LiDAR 데이터를 융합
+        }
+    }
+
+    void imuCallback(const sensor_msgs::msg::Imu::SharedPtr imu_msg)
+    {
+        last_imu_msg_ = imu_msg;
+        fuseGnssImu();
+    }
+
+    // GNSS와 IMU 융합하여 선속도 및 각속도 계산
+    void fuseGnssImu()
+    {
+        if (!last_gnss_fused_pose_ || !last_imu_msg_)
+        {
+            return;
+        }
+
+        Eigen::Vector3d gnss_pos(last_gnss_fused_pose_->pose.pose.position.x, last_gnss_fused_pose_->pose.pose.position.y, last_gnss_fused_pose_->pose.pose.position.z);
+        double imu_yawrate = last_imu_msg_->angular_velocity.z;
+
+        double imu_accel_x = last_imu_msg_->linear_acceleration.x;
+        linear_velocity_x_ += imu_accel_x * 0.1;  // IMU 가속도를 융합
+
+        double yawrate_offset = computeYawrateOffset(linear_velocity_x_, imu_yawrate);
+        double fused_heading = fuseHeadingWithYawrate(gnss_pos, yawrate_offset);
+
+        geometry_msgs::msg::PoseWithCovarianceStamped fused_pose;
+        fused_pose.header.stamp = this->now();
+        fused_pose.header.frame_id = "base_link";
+        fused_pose.pose.pose.position.x = gnss_pos.x();
+        fused_pose.pose.pose.position.y = gnss_pos.y();
+        fused_pose.pose.pose.position.z = gnss_pos.z();
+        fused_pose.pose.pose.orientation = createQuaternionFromYaw(fused_heading);
+
+        for (size_t i = 0; i < 36; ++i)
+        {
+            fused_pose.pose.covariance[i] = computeCovariance();
+        }
+
+        gnss_imu_fusion_pub_->publish(fused_pose);
+
+        geometry_msgs::msg::TwistStamped fused_twist;
+        fused_twist.header.stamp = fused_pose.header.stamp;
+        fused_twist.header.frame_id = "base_link";
+        fused_twist.twist.linear.x = linear_velocity_x_;
+        fused_twist.twist.angular.z = imu_yawrate;
+
+        twist_pub_->publish(fused_twist);
+    }
+
+    // GNSS와 LiDAR 데이터 융합
+    void fusePoses()
+    {
+        Eigen::Vector3d lidar_pos(last_lidar_msg_->pose.pose.position.x, last_lidar_msg_->pose.pose.position.y, last_lidar_msg_->pose.pose.position.z);
+        Eigen::Vector3d gnss_pos(last_gnss_fused_pose_->pose.pose.position.x, last_gnss_fused_pose_->pose.pose.position.y, last_gnss_fused_pose_->pose.pose.position.z);
+
+        geometry_msgs::msg::PoseWithCovarianceStamped final_fused_pose;
+        final_fused_pose.header.stamp = this->now();
+        final_fused_pose.header.frame_id = "base_link";
+        final_fused_pose.pose.pose.position.x = lidar_weight_ * lidar_pos.x() + gnss_weight_ * gnss_pos.x();
+        final_fused_pose.pose.pose.position.y = lidar_weight_ * lidar_pos.y() + gnss_weight_ * gnss_pos.y();
+        final_fused_pose.pose.pose.position.z = lidar_weight_ * lidar_pos.z() + gnss_weight_ * gnss_pos.z();
+        final_fused_pose.pose.pose.orientation = last_lidar_msg_->pose.pose.orientation;
+
+        for (size_t i = 0; i < 36; ++i)
+        {
+            final_fused_pose.pose.covariance[i] = computeCovariance();
+        }
+
+        final_pose_pub_->publish(final_fused_pose);
+
+        broadcastTransform(final_fused_pose);
+    }
+
+    // yawrate
+    double computeYawrateOffset(double gnss_speed, double imu_yawrate)
+    {
+        return imu_yawrate - gnss_speed * 0.01;
+    }
+
+    // GNSS IMU yawrate 융합 -> heading
+    double fuseHeadingWithYawrate(const Eigen::Vector3d &gnss_pos, double yawrate_offset)
+    {
+        return std::atan2(gnss_pos.y(), gnss_pos.x()) + yawrate_offset;
+    }
+
+    // Covariance
+    double computeCovariance()
+    {
+        double imu_covariance = 0.01;
+        double gnss_covariance = 0.5;
+        return (imu_covariance + gnss_covariance) / 2.0;
+    }
+
+    // Yaw -> Quaternion
+    geometry_msgs::msg::Quaternion createQuaternionFromYaw(double yaw)
+    {
+        tf2::Quaternion q;
+        q.setRPY(0, 0, yaw);
+        geometry_msgs::msg::Quaternion msg;
+        tf2::convert(q, msg);
+        return msg;
+    }
+
+    void broadcastTransform(const geometry_msgs::msg::PoseWithCovarianceStamped &fused_pose)
+    {
+        geometry_msgs::msg::TransformStamped transformStamped;
+        transformStamped.header.stamp = fused_pose.header.stamp;
+        transformStamped.header.frame_id = "map";
+        transformStamped.child_frame_id = "base_link";
+        transformStamped.transform.translation.x = fused_pose.pose.pose.position.x;
+        transformStamped.transform.translation.y = fused_pose.pose.pose.position.y;
+        transformStamped.transform.translation.z = fused_pose.pose.pose.position.z;
+        transformStamped.transform.rotation = fused_pose.pose.pose.orientation;
+        tf_broadcaster_->sendTransform(transformStamped);
+    }
+
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr lidar_pose_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr gnss_pose_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+
+    rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr gnss_imu_fusion_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr final_pose_pub_;
+
+    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+
+    geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr last_lidar_msg_;
+    geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr last_gnss_fused_pose_;  // GNSS 데이터를 저장하는 변수
+    sensor_msgs::msg::Imu::SharedPtr last_imu_msg_;
+
+    double linear_velocity_x_ = 0.0;  
+    double lidar_weight_ = 0.5;  
+    double gnss_weight_ = 0.5; 
+};
+
+int main(int argc, char *argv[])
+{
+    rclcpp::init(argc, argv);
+    auto node = std::make_shared<PoseFusionNode>();
+    rclcpp::spin(node);
+    rclcpp::shutdown();
+    return 0;
+}

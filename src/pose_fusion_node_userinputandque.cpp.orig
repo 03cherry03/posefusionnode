@@ -1,0 +1,981 @@
+// #include <rclcpp/rclcpp.hpp>
+// #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+// #include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
+// #include <tf2_ros/transform_broadcaster.h>
+// #include <tf2/LinearMath/Quaternion.h>
+// #include <Eigen/Dense>
+// #include <cmath>
+// #include <string>
+// #include <sstream>
+// #include <iomanip>
+// #include <deque>
+
+// class PoseFusionNode : public rclcpp::Node
+// {
+// public:
+//     PoseFusionNode()
+//         : Node("pose_fusion_node"),
+//           time_tolerance_(0.1),  // 100ms tolerance for matching messages
+//           lidar_weight_user_input_(0.5),  // Default user-defined weight for LiDAR
+//           gnss_weight_user_input_(0.5)  // Default user-defined weight for GNSS
+//     {
+
+//         lidar_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+//             "/localization/pose_with_covariance", 10,
+//             std::bind(&PoseFusionNode::lidarPoseCallback, this, std::placeholders::_1));
+
+//         // lidar_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+//         //     "/localization/pose_with_covariance_lidar", 10,
+//         //     std::bind(&PoseFusionNode::lidarPoseCallback, this, std::placeholders::_1));
+
+//         gnss_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+//             "/mgrs_pose", 10,
+//             std::bind(&PoseFusionNode::gnssPoseCallback, this, std::placeholders::_1));
+
+//         // gnss_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+//         //     "/localization/pose_with_covariance_gnss", 10,
+//         //     std::bind(&PoseFusionNode::gnssPoseCallback, this, std::placeholders::_1));
+
+//         lidar_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+//             "/localization/twist_with_covariance_lidar", 10,
+//             std::bind(&PoseFusionNode::lidarTwistCallback, this, std::placeholders::_1));
+
+//         gnss_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+//             "/gnss_twist_cov", 10,
+//             std::bind(&PoseFusionNode::gnssTwistCallback, this, std::placeholders::_1));
+        
+//         // gnss_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+//         //     "/localization/twist_with_covariance_gnss", 10,
+//         //     std::bind(&PoseFusionNode::gnssTwistCallback, this, std::placeholders::_1));
+
+//         fused_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/fused/localization/pose_with_covariance", 10);
+//         fused_twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("/fused/localization/twist_with_covariance", 10);
+
+//         tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+// //         // LiDAR와 GNSS Pose 입력 토픽들 (Fusion Pose 용)
+// //         lidar_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+// //             "/localization/pose_with_covariance", 10,
+// //             std::bind(&PoseFusionNode::lidarPoseCallback, this, std::placeholders::_1));
+
+// //         gnss_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+// //             "/mgrs/pose", 10,
+// //             std::bind(&PoseFusionNode::gnssPoseCallback, this, std::placeholders::_1));
+
+// //         // LiDAR와 GNSS Twist 입력 토픽들 (Fusion Twist 용)
+// //         lidar_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+// //             "/localization/twist_with_covariance_lidar", 10,
+// //             std::bind(&PoseFusionNode::lidarTwistCallback, this, std::placeholders::_1));
+
+// //         gnss_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+// //             "/localization/twist_with_covariance_gnss", 10,
+// //             std::bind(&PoseFusionNode::gnssTwistCallback, this, std::placeholders::_1));
+
+// //         // 융합된 결과를 출력할 토픽들
+// //         fused_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/fused/localization/pose_with_covariance", 10);
+// //         fused_twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("/localization/twist_with_covariance", 10);
+
+// //         tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+//     }
+
+//     // 사용자로부터 기본 가중치 설정 함수
+//     void setUserWeights(double lidar_weight, double gnss_weight)
+//     {
+//         lidar_weight_user_input_ = lidar_weight;
+//         gnss_weight_user_input_ = gnss_weight;
+//     }
+
+// private:
+//     const size_t MAX_QUEUE_SIZE = 10;
+//     const double time_tolerance_;  // Time tolerance for matching poses and twists
+
+//     // 사용자로부터 입력받은 기본 가중치
+//     double lidar_weight_user_input_;
+//     double gnss_weight_user_input_;
+
+//     // Pose 관련 콜백 함수들
+//     void lidarPoseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr lidar_msg)
+//     {
+//         if (lidar_pose_queue_.size() >= MAX_QUEUE_SIZE)
+//         {
+//             lidar_pose_queue_.pop_front();  // 가장 오래된 메시지를 제거
+//         }
+//         lidar_pose_queue_.push_back(lidar_msg);
+//         processPoseFusion();
+//     }
+
+//     void gnssPoseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr gnss_msg)
+//     {
+//         if (gnss_pose_queue_.size() >= MAX_QUEUE_SIZE)
+//         {
+//             gnss_pose_queue_.pop_front();  // 가장 오래된 메시지를 제거
+//         }
+//         gnss_pose_queue_.push_back(gnss_msg);
+//         processPoseFusion();
+//     }
+
+//     // Twist 관련 콜백 함수들
+//     void lidarTwistCallback(const geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr lidar_msg)
+//     {
+//         if (lidar_twist_queue_.size() >= MAX_QUEUE_SIZE)
+//         {
+//             lidar_twist_queue_.pop_front();  // 가장 오래된 메시지를 제거
+//         }
+//         lidar_twist_queue_.push_back(lidar_msg);
+//         processTwistFusion();
+//     }
+
+//     void gnssTwistCallback(const geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr gnss_msg)
+//     {
+//         if (gnss_twist_queue_.size() >= MAX_QUEUE_SIZE)
+//         {
+//             gnss_twist_queue_.pop_front();  // 가장 오래된 메시지를 제거
+//         }
+//         gnss_twist_queue_.push_back(gnss_msg);
+//         processTwistFusion();
+//     }
+
+//     void processPoseFusion()
+//     {
+//         if (lidar_pose_queue_.empty() || gnss_pose_queue_.empty())
+//             return;
+
+//         auto lidar_msg = lidar_pose_queue_.front();
+//         auto closest_gnss_msg = findClosestGnssPose(lidar_msg->header.stamp);
+
+//         if (closest_gnss_msg != nullptr)
+//         {
+//             last_lidar_pose_msg_ = lidar_msg;
+//             last_gnss_pose_msg_ = closest_gnss_msg;
+
+//             fusePoses();
+
+//             lidar_pose_queue_.pop_front();
+//             gnss_pose_queue_.pop_front();  // 매칭된 GNSS 메시지만 제거
+//         }
+//     }
+
+//     void processTwistFusion()
+//     {
+//         if (lidar_twist_queue_.empty() || gnss_twist_queue_.empty())
+//             return;
+
+//         auto lidar_msg = lidar_twist_queue_.front();
+//         auto closest_gnss_msg = findClosestGnssTwist(lidar_msg->header.stamp);
+
+//         if (closest_gnss_msg != nullptr)
+//         {
+//             last_lidar_twist_msg_ = lidar_msg;
+//             last_gnss_twist_msg_ = closest_gnss_msg;
+
+//             fuseTwists();
+
+//             lidar_twist_queue_.pop_front();
+//             gnss_twist_queue_.pop_front();  // 매칭된 GNSS Twist 메시지만 제거
+//         }
+//     }
+
+//     geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr findClosestGnssPose(const rclcpp::Time& lidar_time)
+//     {
+//         geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr closest_msg = nullptr;
+//         rclcpp::Duration min_time_diff = rclcpp::Duration::from_seconds(time_tolerance_);
+
+//         for (const auto& gnss_msg : gnss_pose_queue_)
+//         {
+//             rclcpp::Duration time_diff = lidar_time - gnss_msg->header.stamp;
+            
+//             if (std::abs(time_diff.nanoseconds()) < min_time_diff.nanoseconds())
+//             {
+//                 min_time_diff = time_diff;
+//                 closest_msg = gnss_msg;
+//             }
+//         }
+//         return closest_msg;
+//     }
+
+//     geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr findClosestGnssTwist(const rclcpp::Time& lidar_time)
+//     {
+//         geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr closest_msg = nullptr;
+//         rclcpp::Duration min_time_diff = rclcpp::Duration::from_seconds(time_tolerance_);
+
+//         for (const auto& gnss_msg : gnss_twist_queue_)
+//         {
+//             rclcpp::Duration time_diff = lidar_time - gnss_msg->header.stamp;
+            
+//             if (std::abs(time_diff.nanoseconds()) < min_time_diff.nanoseconds())
+//             {
+//                 min_time_diff = time_diff;
+//                 closest_msg = gnss_msg;
+//             }
+//         }
+//         return closest_msg;
+//     }
+
+//     // 공분산 행렬에서 trace(대각선 요소 합)를 계산하는 함수
+//     double calculateCovarianceTrace(const std::array<double, 36>& covariance)
+//     {
+//         // Covariance 행렬의 trace를 계산 (X, Y, Z 축에 대한 variance 합)
+//         return covariance[0] + covariance[7] + covariance[14];  // X, Y, Z의 대각선 값
+//     }
+
+//     // void fusePoses()
+//     // {
+//     //     Eigen::Vector3d lidar_pos(last_lidar_pose_msg_->pose.pose.position.x, last_lidar_pose_msg_->pose.pose.position.y, last_lidar_pose_msg_->pose.pose.position.z);
+//     //     Eigen::Vector3d gnss_pos(last_gnss_pose_msg_->pose.pose.position.x, last_gnss_pose_msg_->pose.pose.position.y, last_gnss_pose_msg_->pose.pose.position.z);
+
+//     //     // Covariance trace를 사용하여 불확실성 계산
+//     //     double lidar_cov_trace = calculateCovarianceTrace(last_lidar_pose_msg_->pose.covariance);
+//     //     double gnss_cov_trace = calculateCovarianceTrace(last_gnss_pose_msg_->pose.covariance);
+
+//     //     // 사용자가 입력한 가중치에 Covariance 기반 가중치를 반영하여 최종 가중치 계산
+//     //     double total_cov_trace = lidar_cov_trace + gnss_cov_trace;
+//     //     double lidar_weight = lidar_weight_user_input_ * (1.0 - (lidar_cov_trace / total_cov_trace));
+//     //     double gnss_weight = gnss_weight_user_input_ * (1.0 - (gnss_cov_trace / total_cov_trace));
+
+//     //     geometry_msgs::msg::PoseWithCovarianceStamped fused_pose;
+//     //     fused_pose.header.stamp = this->now();
+//     //     fused_pose.header.frame_id = "map";
+
+//     //     // 위치 융합 (최종 가중치 기반)
+//     //     fused_pose.pose.pose.position.x = lidar_weight * lidar_pos.x() + gnss_weight * gnss_pos.x();
+//     //     fused_pose.pose.pose.position.y = lidar_weight * lidar_pos.y() + gnss_weight * gnss_pos.y();
+//     //     fused_pose.pose.pose.position.z = lidar_weight * lidar_pos.z() + gnss_weight * gnss_pos.z();
+
+//     //     // Orientation은 현재 LiDAR 기반으로 사용
+//     //     fused_pose.pose.pose.orientation = last_lidar_pose_msg_->pose.pose.orientation;
+
+//     //     // Covariance 융합
+//     //     for (size_t i = 0; i < 36; ++i)
+//     //     {
+//     //         fused_pose.pose.covariance[i] = lidar_weight * last_lidar_pose_msg_->pose.covariance[i] +
+//     //                                         gnss_weight * last_gnss_pose_msg_->pose.covariance[i];
+//     //     }
+
+//     //     fused_pose_pub_->publish(fused_pose);
+//     //     broadcastTransform(fused_pose);
+//     // }
+
+//     // void fuseTwists()
+//     // {
+//     //     geometry_msgs::msg::TwistWithCovarianceStamped fused_twist;
+//     //     fused_twist.header.stamp = this->now();
+//     //     fused_twist.header.frame_id = "base_link"; 
+
+//     //     // Twist covariance trace를 사용하여 불확실성 측정
+//     //     double lidar_cov_trace = calculateCovarianceTrace(last_lidar_twist_msg_->twist.covariance);
+//     //     double gnss_cov_trace = calculateCovarianceTrace(last_gnss_twist_msg_->twist.covariance);
+
+//     //     // 사용자가 입력한 가중치에 Covariance 기반 가중치를 반영하여 최종 가중치 계산
+//     //     double total_twist_cov_trace = lidar_cov_trace + gnss_cov_trace;
+//     //     double lidar_twist_weight = lidar_weight_user_input_ * (1.0 - (lidar_cov_trace / total_twist_cov_trace));
+//     //     double gnss_twist_weight = gnss_weight_user_input_ * (1.0 - (gnss_cov_trace / total_twist_cov_trace));
+
+//     //     // Covariance 융합
+//     //     for (size_t i = 0; i < 36; ++i)
+//     //     {
+//     //         fused_twist.twist.covariance[i] = lidar_twist_weight * last_lidar_twist_msg_->twist.covariance[i] +
+//     //                                           gnss_twist_weight * last_gnss_twist_msg_->twist.covariance[i];
+//     //     }
+
+//     //     // 선형 속도 융합
+//     //     fused_twist.twist.twist.linear.x = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.linear.x + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.linear.x;
+//     //     fused_twist.twist.twist.linear.y = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.linear.y + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.linear.y;
+//     //     fused_twist.twist.twist.linear.z = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.linear.z + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.linear.z;
+
+//     //     // 각속도 융합
+//     //     fused_twist.twist.twist.angular.x = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.angular.x + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.angular.x;
+//     //     fused_twist.twist.twist.angular.y = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.angular.y + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.angular.y;
+//     //     fused_twist.twist.twist.angular.z = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.angular.z + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.angular.z;
+
+//     //     fused_twist_pub_->publish(fused_twist);
+//     // }
+
+//     void fusePoses()
+//     {
+//         Eigen::Vector3d lidar_pos(last_lidar_pose_msg_->pose.pose.position.x, last_lidar_pose_msg_->pose.pose.position.y, last_lidar_pose_msg_->pose.pose.position.z);
+//         Eigen::Vector3d gnss_pos(last_gnss_pose_msg_->pose.pose.position.x, last_gnss_pose_msg_->pose.pose.position.y, last_gnss_pose_msg_->pose.pose.position.z);
+
+//         // Covariance trace를 사용하여 불확실성 계산
+//         double lidar_cov_trace = calculateCovarianceTrace(last_lidar_pose_msg_->pose.covariance);
+//         double gnss_cov_trace = calculateCovarianceTrace(last_gnss_pose_msg_->pose.covariance);
+
+//         // Covariance에 기반한 동적 가중치 계산 (trace가 작을수록 신뢰도 증가)
+//         double total_cov_trace = lidar_cov_trace + gnss_cov_trace;
+        
+//         // GNSS와 LiDAR의 최종 가중치 계산 (합이 1이 되도록)
+//         double lidar_weight = 1.0 - (lidar_cov_trace / total_cov_trace);
+//         double gnss_weight = 1.0 - (gnss_cov_trace / total_cov_trace);
+
+//         geometry_msgs::msg::PoseWithCovarianceStamped fused_pose;
+//         fused_pose.header.stamp = this->now();
+//         fused_pose.header.frame_id = "map";
+
+//         // 위치 융합 (가중치 기반)
+//         fused_pose.pose.pose.position.x = lidar_weight * lidar_pos.x() + gnss_weight * gnss_pos.x();
+//         fused_pose.pose.pose.position.y = lidar_weight * lidar_pos.y() + gnss_weight * gnss_pos.y();
+//         fused_pose.pose.pose.position.z = lidar_weight * lidar_pos.z() + gnss_weight * gnss_pos.z();
+
+//         // Orientation은 현재 LiDAR 기반으로 사용
+//         fused_pose.pose.pose.orientation = last_lidar_pose_msg_->pose.pose.orientation;
+
+//         // Covariance 융합
+//         for (size_t i = 0; i < 36; ++i)
+//         {
+//             fused_pose.pose.covariance[i] = lidar_weight * last_lidar_pose_msg_->pose.covariance[i] +
+//                                             gnss_weight * last_gnss_pose_msg_->pose.covariance[i];
+//         }
+
+//         fused_pose_pub_->publish(fused_pose);
+//         broadcastTransform(fused_pose);
+//     }
+
+//     void fuseTwists()
+//     {
+//         geometry_msgs::msg::TwistWithCovarianceStamped fused_twist;
+//         fused_twist.header.stamp = this->now();
+//         fused_twist.header.frame_id = "base_link"; 
+
+//         // Covariance trace를 사용하여 불확실성 측정
+//         double lidar_cov_trace = calculateCovarianceTrace(last_lidar_twist_msg_->twist.covariance);
+//         double gnss_cov_trace = calculateCovarianceTrace(last_gnss_twist_msg_->twist.covariance);
+
+//         // Covariance에 기반한 동적 가중치 계산 (trace가 작을수록 신뢰도 증가)
+//         double total_cov_trace = lidar_cov_trace + gnss_cov_trace;
+        
+//         // GNSS와 LiDAR의 최종 가중치 계산 (합이 1이 되도록)
+//         double lidar_twist_weight = 1.0 - (lidar_cov_trace / total_cov_trace);
+//         double gnss_twist_weight = 1.0 - (gnss_cov_trace / total_cov_trace);
+
+//         // Covariance 융합
+//         for (size_t i = 0; i < 36; ++i)
+//         {
+//             fused_twist.twist.covariance[i] = lidar_twist_weight * last_lidar_twist_msg_->twist.covariance[i] +
+//                                             gnss_twist_weight * last_gnss_twist_msg_->twist.covariance[i];
+//         }
+
+//         // 선형 속도 융합
+//         fused_twist.twist.twist.linear.x = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.linear.x + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.linear.x;
+//         fused_twist.twist.twist.linear.y = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.linear.y + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.linear.y;
+//         fused_twist.twist.twist.linear.z = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.linear.z + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.linear.z;
+
+//         // 각속도 융합
+//         fused_twist.twist.twist.angular.x = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.angular.x + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.angular.x;
+//         fused_twist.twist.twist.angular.y = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.angular.y + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.angular.y;
+//         fused_twist.twist.twist.angular.z = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.angular.z + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.angular.z;
+
+//         fused_twist_pub_->publish(fused_twist);
+//     }
+
+//     void broadcastTransform(const geometry_msgs::msg::PoseWithCovarianceStamped &fused_pose)
+//     {
+//         geometry_msgs::msg::TransformStamped transformStamped;
+
+//         transformStamped.header.stamp = fused_pose.header.stamp;
+//         transformStamped.header.frame_id = "map"; 
+//         transformStamped.child_frame_id = "base_link";
+
+//         transformStamped.transform.translation.x = fused_pose.pose.pose.position.x;
+//         transformStamped.transform.translation.y = fused_pose.pose.pose.position.y;
+//         transformStamped.transform.translation.z = fused_pose.pose.pose.position.z;
+
+//         transformStamped.transform.rotation.x = fused_pose.pose.pose.orientation.x;
+//         transformStamped.transform.rotation.y = fused_pose.pose.pose.orientation.y;
+//         transformStamped.transform.rotation.z = fused_pose.pose.pose.orientation.z;
+//         transformStamped.transform.rotation.w = fused_pose.pose.pose.orientation.w;
+
+//         tf_broadcaster_->sendTransform(transformStamped);
+//     }
+
+//     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr lidar_pose_sub_;
+//     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr gnss_pose_sub_;
+//     rclcpp::Subscription<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr lidar_twist_sub_;
+//     rclcpp::Subscription<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr gnss_twist_sub_;
+//     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr fused_pose_pub_;
+//     rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr fused_twist_pub_;
+
+//     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+
+//     std::deque<geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr> lidar_pose_queue_;
+//     std::deque<geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr> gnss_pose_queue_;
+//     std::deque<geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr> lidar_twist_queue_;
+//     std::deque<geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr> gnss_twist_queue_;
+
+//     geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr last_lidar_pose_msg_;
+//     geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr last_gnss_pose_msg_;
+//     geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr last_lidar_twist_msg_;
+//     geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr last_gnss_twist_msg_;
+// };
+
+// int main(int argc, char *argv[])
+// {
+//     rclcpp::init(argc, argv);
+//     rclcpp::spin(std::make_shared<PoseFusionNode>());
+//     rclcpp::shutdown();
+//     return 0;
+// }
+
+
+
+
+
+//3rd
+// #include <rclcpp/rclcpp.hpp>
+// #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+// #include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
+// #include <tf2_ros/transform_broadcaster.h>
+// #include <tf2/LinearMath/Quaternion.h>
+// #include <Eigen/Dense>
+// #include <cmath>
+// #include <string>
+// #include <sstream>
+// #include <iomanip>
+
+// class PoseFusionNode : public rclcpp::Node
+// {
+// public:
+//     PoseFusionNode()
+//         : Node("pose_fusion_node")
+//     {
+//         // Declare parameters with default values
+//         double lidar_weight = this->declare_parameter<double>("lidar_weight", 0.5);
+//         double gnss_weight = this->declare_parameter<double>("gnss_weight", 0.5);
+
+//         setUserWeights(lidar_weight, gnss_weight);
+    
+//         // Subscribe to LiDAR and GNSS pose topics
+//         lidar_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+//             "/localization/pose_with_covariance", 10,
+//             std::bind(&PoseFusionNode::lidarPoseCallback, this, std::placeholders::_1));
+
+//         gnss_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+//             "/mgrs_pose", 10,
+//             std::bind(&PoseFusionNode::gnssPoseCallback, this, std::placeholders::_1));
+
+//         // Subscribe to LiDAR and GNSS twist topics
+//         lidar_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+//             "/localization/twist_with_covariance_lidar", 10,
+//             std::bind(&PoseFusionNode::lidarTwistCallback, this, std::placeholders::_1));
+
+//         gnss_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+//             "/gnss_twist_cov", 10,
+//             std::bind(&PoseFusionNode::gnssTwistCallback, this, std::placeholders::_1));
+
+//         // Publisher for fused pose and twist
+//         fused_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/fused/localization/pose_with_covariance", 10);
+//         fused_twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("/fused/localization/twist_with_covariance", 10);
+
+//         // Transform broadcaster for TF
+//         tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+//     }
+
+//     // Set user-defined weights for LiDAR and GNSS
+//     void setUserWeights(double lidar_weight, double gnss_weight)
+//     {
+//         lidar_weight_user_input_ = lidar_weight;
+//         gnss_weight_user_input_ = gnss_weight;
+//     }
+
+// private:
+//     // User-defined weights for LiDAR and GNSS
+//     double lidar_weight_user_input_;
+//     double gnss_weight_user_input_;
+
+//     // Last received LiDAR and GNSS pose and twist messages
+//     geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr last_lidar_pose_msg_;
+//     geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr last_gnss_pose_msg_;
+//     geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr last_lidar_twist_msg_;
+//     geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr last_gnss_twist_msg_;
+
+//     // Callback for LiDAR pose
+//     void lidarPoseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr lidar_msg)
+//     {
+//         last_lidar_pose_msg_ = lidar_msg;
+//         // Fuse if GNSS pose is available and time difference is within 100 ms
+//         if (last_gnss_pose_msg_ && std::abs((lidar_msg->header.stamp - last_gnss_pose_msg_->header.stamp).seconds()) < 0.1)
+//         {
+//             fusePoses();
+//         }
+//     }
+
+//     // Callback for GNSS pose
+//     void gnssPoseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr gnss_msg)
+//     {
+//         last_gnss_pose_msg_ = gnss_msg;
+//         // Fuse if LiDAR pose is available and time difference is within 100 ms
+//         if (last_lidar_pose_msg_ && std::abs((gnss_msg->header.stamp - last_lidar_pose_msg_->header.stamp).seconds()) < 0.1)
+//         {
+//             fusePoses();
+//         }
+//     }
+
+//     // Callback for LiDAR twist
+//     void lidarTwistCallback(const geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr lidar_msg)
+//     {
+//         last_lidar_twist_msg_ = lidar_msg;
+//         // Fuse if GNSS twist is available and time difference is within 100 ms
+//         if (last_gnss_twist_msg_ && std::abs((lidar_msg->header.stamp - last_gnss_twist_msg_->header.stamp).seconds()) < 0.1)
+//         {
+//             fuseTwists();
+//         }
+//     }
+
+//     // Callback for GNSS twist
+//     void gnssTwistCallback(const geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr gnss_msg)
+//     {
+//         last_gnss_twist_msg_ = gnss_msg;
+//         // Fuse if LiDAR twist is available and time difference is within 100 ms
+//         if (last_lidar_twist_msg_ && std::abs((gnss_msg->header.stamp - last_lidar_twist_msg_->header.stamp).seconds()) < 0.1)
+//         {
+//             fuseTwists();
+//         }
+//     }
+
+//     // Fuse LiDAR and GNSS poses
+//     void fusePoses()
+//     {
+//         Eigen::Vector3d lidar_pos(last_lidar_pose_msg_->pose.pose.position.x, last_lidar_pose_msg_->pose.pose.position.y, last_lidar_pose_msg_->pose.pose.position.z);
+//         Eigen::Vector3d gnss_pos(last_gnss_pose_msg_->pose.pose.position.x, last_gnss_pose_msg_->pose.pose.position.y, last_gnss_pose_msg_->pose.pose.position.z);
+
+//         double lidar_weight = lidar_weight_user_input_;
+//         double gnss_weight = gnss_weight_user_input_;
+
+//         double weight_sum = lidar_weight + gnss_weight;
+//         lidar_weight /= weight_sum;
+//         gnss_weight /= weight_sum;
+
+//         geometry_msgs::msg::PoseWithCovarianceStamped fused_pose;
+//         fused_pose.header.stamp = this->now();
+//         fused_pose.header.frame_id = "map";
+
+//         // Fuse position based on weights
+//         fused_pose.pose.pose.position.x = lidar_weight * lidar_pos.x() + gnss_weight * gnss_pos.x();
+//         fused_pose.pose.pose.position.y = lidar_weight * lidar_pos.y() + gnss_weight * gnss_pos.y();
+//         fused_pose.pose.pose.position.z = lidar_weight * lidar_pos.z() + gnss_weight * gnss_pos.z();
+
+//         // Use LiDAR orientation
+//         fused_pose.pose.pose.orientation = last_lidar_pose_msg_->pose.pose.orientation;
+
+//         // Fuse covariance
+//         for (size_t i = 0; i < 36; ++i)
+//         {
+//             fused_pose.pose.covariance[i] = lidar_weight * last_lidar_pose_msg_->pose.covariance[i] +
+//                                             gnss_weight * last_gnss_pose_msg_->pose.covariance[i];
+//         }
+
+//         fused_pose_pub_->publish(fused_pose);
+//         broadcastTransform(fused_pose);
+//     }
+
+//     // Fuse LiDAR and GNSS twists
+//     void fuseTwists()
+//     {
+//         geometry_msgs::msg::TwistWithCovarianceStamped fused_twist;
+//         fused_twist.header.stamp = this->now();
+//         fused_twist.header.frame_id = "base_link"; 
+
+//         double lidar_twist_weight = lidar_weight_user_input_;
+//         double gnss_twist_weight = gnss_weight_user_input_;
+
+//         double weight_sum = lidar_twist_weight + gnss_twist_weight;
+//         lidar_twist_weight /= weight_sum;
+//         gnss_twist_weight /= weight_sum;
+
+//         // Fuse covariance
+//         for (size_t i = 0; i < 36; ++i)
+//         {
+//             fused_twist.twist.covariance[i] = lidar_twist_weight * last_lidar_twist_msg_->twist.covariance[i] +
+//                                               gnss_twist_weight * last_gnss_twist_msg_->twist.covariance[i];
+//         }
+
+//         // Fuse linear velocity
+//         fused_twist.twist.twist.linear.x = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.linear.x + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.linear.x;
+//         fused_twist.twist.twist.linear.y = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.linear.y + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.linear.y;
+//         fused_twist.twist.twist.linear.z = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.linear.z + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.linear.z;
+
+//         // Fuse angular velocity
+//         fused_twist.twist.twist.angular.x = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.angular.x + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.angular.x;
+//         fused_twist.twist.twist.angular.y = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.angular.y + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.angular.y;
+//         fused_twist.twist.twist.angular.z = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.angular.z + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.angular.z;
+
+//         fused_twist_pub_->publish(fused_twist);
+//     }
+
+//     // Broadcast TF transform
+//     void broadcastTransform(const geometry_msgs::msg::PoseWithCovarianceStamped &fused_pose)
+//     {
+//         geometry_msgs::msg::TransformStamped transformStamped;
+
+//         transformStamped.header.stamp = fused_pose.header.stamp;
+//         transformStamped.header.frame_id = "map"; 
+//         transformStamped.child_frame_id = "base_link";
+
+//         transformStamped.transform.translation.x = fused_pose.pose.pose.position.x;
+//         transformStamped.transform.translation.y = fused_pose.pose.pose.position.y;
+//         transformStamped.transform.translation.z = fused_pose.pose.pose.position.z;
+
+//         transformStamped.transform.rotation.x = fused_pose.pose.pose.orientation.x;
+//         transformStamped.transform.rotation.y = fused_pose.pose.pose.orientation.y;
+//         transformStamped.transform.rotation.z = fused_pose.pose.pose.orientation.z;
+//         transformStamped.transform.rotation.w = fused_pose.pose.pose.orientation.w;
+
+//         tf_broadcaster_->sendTransform(transformStamped);
+//     }
+
+//     // ROS 2 subscriptions
+//     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr lidar_pose_sub_;
+//     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr gnss_pose_sub_;
+//     rclcpp::Subscription<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr lidar_twist_sub_;
+//     rclcpp::Subscription<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr gnss_twist_sub_;
+
+//     // ROS 2 publishers
+//     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr fused_pose_pub_;
+//     rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr fused_twist_pub_;
+
+//     // Transform broadcaster
+//     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+// };
+
+// int main(int argc, char *argv[])
+// {
+//     rclcpp::init(argc, argv);
+//     auto node = std::make_shared<PoseFusionNode>();
+
+//     rclcpp::spin(node);
+//     rclcpp::shutdown();
+//     return 0;
+// }
+
+
+
+
+
+
+
+#include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2/LinearMath/Quaternion.h>
+#include <Eigen/Dense>
+#include <cmath>
+#include <string>
+#include <sstream>
+#include <iomanip>
+#include <deque>
+
+class PoseFusionNode : public rclcpp::Node
+{
+public:
+    PoseFusionNode()
+        : Node("pose_fusion_node")
+    {
+        this->declare_parameter<double>("lidar_weight", 0.5);
+        this->declare_parameter<double>("gnss_weight", 0.5);
+
+        double lidar_weight, gnss_weight;
+        this->get_parameter("lidar_weight", lidar_weight);
+        this->get_parameter("gnss_weight", gnss_weight);
+
+        setUserWeights(lidar_weight, gnss_weight);
+    
+        lidar_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+            "/localization/pose_with_covariance", 10,
+            std::bind(&PoseFusionNode::lidarPoseCallback, this, std::placeholders::_1));
+
+        // lidar_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+        //     "/localization/pose_with_covariance_lidar", 10,
+        //     std::bind(&PoseFusionNode::lidarPoseCallback, this, std::placeholders::_1));
+
+        gnss_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+            "/mgrs_pose", 10,
+            std::bind(&PoseFusionNode::gnssPoseCallback, this, std::placeholders::_1));
+
+        // gnss_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+        //     "/localization/pose_with_covariance_gnss", 10,
+        //     std::bind(&PoseFusionNode::gnssPoseCallback, this, std::placeholders::_1));
+
+        lidar_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+            "/localization/twist_with_covariance_lidar", 0,
+            std::bind(&PoseFusionNode::lidarTwistCallback, this, std::placeholders::_1));
+
+        gnss_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+            "/gnss_twist_cov", 10,
+            std::bind(&PoseFusionNode::gnssTwistCallback, this, std::placeholders::_1));
+        
+        // gnss_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+        //     "/localization/twist_with_covariance_gnss", 10,
+        //     std::bind(&PoseFusionNode::gnssTwistCallback, this, std::placeholders::_1));
+
+        fused_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/fused/localization/pose_with_covariance", 10);
+        fused_twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("/fused/localization/twist_with_covariance", 10);
+
+
+        // // LiDAR와 GNSS Pose 입력 토픽들 (Fusion Pose 용)
+        // lidar_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+        //     "/localization/pose_with_covariance_lidar", 10,
+        //     std::bind(&PoseFusionNode::lidarPoseCallback, this, std::placeholders::_1));
+
+        // gnss_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+        //     "/localization/pose_with_covariance_gnss", 10,
+        //     std::bind(&PoseFusionNode::gnssPoseCallback, this, std::placeholders::_1));
+
+        // // LiDAR와 GNSS Twist 입력 토픽들 (Fusion Twist 용)
+        // lidar_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+        //     "/localization/twist_with_covariance_lidar", 10,
+        //     std::bind(&PoseFusionNode::lidarTwistCallback, this, std::placeholders::_1));
+
+        // gnss_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
+        //     "/localization/twist_with_covariance_gnss", 10,
+        //     std::bind(&PoseFusionNode::gnssTwistCallback, this, std::placeholders::_1));
+
+        // // 융합된 결과를 출력할 토픽들
+        // fused_pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/localization/pose_with_covariance", 10);
+        // fused_twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("/localization/twist_with_covariance", 10);
+
+        tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+    }
+
+    // 사용자로부터 기본 가중치 설정 함수
+    void setUserWeights(double lidar_weight, double gnss_weight)
+    {
+        lidar_weight_user_input_ = lidar_weight;
+        gnss_weight_user_input_ = gnss_weight;
+    }
+
+private:
+    const size_t MAX_QUEUE_SIZE = 5;
+
+    double lidar_weight_user_input_;
+    double gnss_weight_user_input_;
+
+    void lidarPoseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr lidar_msg)
+    {
+        if (lidar_pose_queue_.size() >= MAX_QUEUE_SIZE)
+        {
+            lidar_pose_queue_.pop_front();  // 가장 오래된 메시지를 제거
+        }
+        lidar_pose_queue_.push_back(lidar_msg);
+        processPoseFusion();
+    }
+
+    void gnssPoseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr gnss_msg)
+    {
+        if (gnss_pose_queue_.size() >= MAX_QUEUE_SIZE)
+        {
+            gnss_pose_queue_.pop_front();  // 가장 오래된 메시지를 제거
+        }
+        gnss_pose_queue_.push_back(gnss_msg);
+        processPoseFusion();
+    }
+
+    void lidarTwistCallback(const geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr lidar_msg)
+    {
+        if (lidar_twist_queue_.size() >= MAX_QUEUE_SIZE)
+        {
+            lidar_twist_queue_.pop_front();  // 가장 오래된 메시지를 제거
+        }
+        lidar_twist_queue_.push_back(lidar_msg);
+        processTwistFusion();
+    }
+
+    void gnssTwistCallback(const geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr gnss_msg)
+    {
+        if (gnss_twist_queue_.size() >= MAX_QUEUE_SIZE)
+        {
+            gnss_twist_queue_.pop_front();  // 가장 오래된 메시지를 제거
+        }
+        gnss_twist_queue_.push_back(gnss_msg);
+        processTwistFusion();
+    }
+
+    void processPoseFusion()
+    {
+        if (lidar_pose_queue_.empty() || gnss_pose_queue_.empty())
+            return;
+
+        auto lidar_msg = lidar_pose_queue_.front();
+        auto closest_gnss_msg = findClosestGnssPose(lidar_msg->header.stamp);
+
+        if (closest_gnss_msg != nullptr)
+        {
+            last_lidar_pose_msg_ = lidar_msg;
+            last_gnss_pose_msg_ = closest_gnss_msg;
+
+            fusePoses();
+
+            lidar_pose_queue_.pop_front();
+            gnss_pose_queue_.pop_front();  // 매칭된 GNSS 메시지만 제거
+        }
+    }
+
+    void processTwistFusion()
+    {
+        if (lidar_twist_queue_.empty() || gnss_twist_queue_.empty())
+            return;
+
+        auto lidar_msg = lidar_twist_queue_.front();
+        auto closest_gnss_msg = findClosestGnssTwist(lidar_msg->header.stamp);
+
+        if (closest_gnss_msg != nullptr)
+        {
+            last_lidar_twist_msg_ = lidar_msg;
+            last_gnss_twist_msg_ = closest_gnss_msg;
+
+            fuseTwists();
+
+            lidar_twist_queue_.pop_front();
+            gnss_twist_queue_.pop_front();  // 매칭된 GNSS Twist 메시지만 제거
+        }
+    }
+
+    geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr findClosestGnssPose(const rclcpp::Time& lidar_time)
+    {
+        geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr closest_msg = nullptr;
+        rclcpp::Duration min_time_diff = rclcpp::Duration::from_seconds(0.1);
+
+        for (const auto& gnss_msg : gnss_pose_queue_)
+        {
+            rclcpp::Duration time_diff = lidar_time - gnss_msg->header.stamp;
+            
+            if (std::abs(time_diff.nanoseconds()) < min_time_diff.nanoseconds())
+            {
+                min_time_diff = time_diff;
+                closest_msg = gnss_msg;
+            }
+        }
+        return closest_msg;
+    }
+
+    geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr findClosestGnssTwist(const rclcpp::Time& lidar_time)
+    {
+        geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr closest_msg = nullptr;
+        rclcpp::Duration min_time_diff = rclcpp::Duration::from_seconds(0.1);
+
+        for (const auto& gnss_msg : gnss_twist_queue_)
+        {
+            rclcpp::Duration time_diff = lidar_time - gnss_msg->header.stamp;
+            
+            if (std::abs(time_diff.nanoseconds()) < min_time_diff.nanoseconds())
+            {
+                min_time_diff = time_diff;
+                closest_msg = gnss_msg;
+            }
+        }
+        return closest_msg;
+    }
+
+// user input weight만 고려하는 코드
+    void fusePoses()
+    {
+        Eigen::Vector3d lidar_pos(last_lidar_pose_msg_->pose.pose.position.x, last_lidar_pose_msg_->pose.pose.position.y, last_lidar_pose_msg_->pose.pose.position.z);
+        Eigen::Vector3d gnss_pos(last_gnss_pose_msg_->pose.pose.position.x, last_gnss_pose_msg_->pose.pose.position.y, last_gnss_pose_msg_->pose.pose.position.z);
+
+        double lidar_weight = lidar_weight_user_input_;
+        double gnss_weight = gnss_weight_user_input_;
+
+        double weight_sum = lidar_weight + gnss_weight;
+
+        lidar_weight = lidar_weight / weight_sum;
+        gnss_weight = gnss_weight / weight_sum;
+
+        geometry_msgs::msg::PoseWithCovarianceStamped fused_pose;
+        fused_pose.header.stamp = this->now();
+        fused_pose.header.frame_id = "map";
+
+        fused_pose.pose.pose.position.x = lidar_weight * lidar_pos.x() + gnss_weight * gnss_pos.x();
+        fused_pose.pose.pose.position.y = lidar_weight * lidar_pos.y() + gnss_weight * gnss_pos.y();
+        fused_pose.pose.pose.position.z = lidar_weight * lidar_pos.z() + gnss_weight * gnss_pos.z();
+
+        fused_pose.pose.pose.orientation = last_lidar_pose_msg_->pose.pose.orientation;
+
+        for (size_t i = 0; i < 36; ++i)
+        {
+            fused_pose.pose.covariance[i] = lidar_weight * last_lidar_pose_msg_->pose.covariance[i] +
+                                            gnss_weight * last_gnss_pose_msg_->pose.covariance[i];
+        }
+
+        fused_pose_pub_->publish(fused_pose);
+        broadcastTransform(fused_pose);
+    }
+
+    void fuseTwists()
+    {
+        geometry_msgs::msg::TwistWithCovarianceStamped fused_twist;
+        fused_twist.header.stamp = this->now();
+        fused_twist.header.frame_id = "base_link"; 
+
+        double lidar_twist_weight = lidar_weight_user_input_;
+        double gnss_twist_weight = gnss_weight_user_input_;
+
+        double weight_sum = lidar_twist_weight + gnss_twist_weight;
+
+        lidar_twist_weight = lidar_twist_weight / weight_sum;
+        gnss_twist_weight = gnss_twist_weight / weight_sum;
+
+        for (size_t i = 0; i < 36; ++i)
+        {
+            fused_twist.twist.covariance[i] = lidar_twist_weight * last_lidar_twist_msg_->twist.covariance[i] +
+                                              gnss_twist_weight * last_gnss_twist_msg_->twist.covariance[i];
+        }
+
+        // 선속도 융합
+        fused_twist.twist.twist.linear.x = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.linear.x + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.linear.x;
+        fused_twist.twist.twist.linear.y = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.linear.y + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.linear.y;
+        fused_twist.twist.twist.linear.z = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.linear.z + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.linear.z;
+
+        // 각속도 융합
+        fused_twist.twist.twist.angular.x = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.angular.x + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.angular.x;
+        fused_twist.twist.twist.angular.y = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.angular.y + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.angular.y;
+        fused_twist.twist.twist.angular.z = lidar_twist_weight * last_lidar_twist_msg_->twist.twist.angular.z + gnss_twist_weight * last_gnss_twist_msg_->twist.twist.angular.z;
+
+        fused_twist_pub_->publish(fused_twist);
+    }
+
+    void broadcastTransform(const geometry_msgs::msg::PoseWithCovarianceStamped &fused_pose)
+    {
+        geometry_msgs::msg::TransformStamped transformStamped;
+
+        transformStamped.header.stamp = fused_pose.header.stamp;
+        transformStamped.header.frame_id = "map"; 
+        transformStamped.child_frame_id = "base_link";
+
+        transformStamped.transform.translation.x = fused_pose.pose.pose.position.x;
+        transformStamped.transform.translation.y = fused_pose.pose.pose.position.y;
+        transformStamped.transform.translation.z = fused_pose.pose.pose.position.z;
+
+        transformStamped.transform.rotation.x = fused_pose.pose.pose.orientation.x;
+        transformStamped.transform.rotation.y = fused_pose.pose.pose.orientation.y;
+        transformStamped.transform.rotation.z = fused_pose.pose.pose.orientation.z;
+        transformStamped.transform.rotation.w = fused_pose.pose.pose.orientation.w;
+
+        tf_broadcaster_->sendTransform(transformStamped);
+    }
+
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr lidar_pose_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr gnss_pose_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr lidar_twist_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr gnss_twist_sub_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr fused_pose_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr fused_twist_pub_;
+
+    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+
+    std::deque<geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr> lidar_pose_queue_;
+    std::deque<geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr> gnss_pose_queue_;
+    std::deque<geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr> lidar_twist_queue_;
+    std::deque<geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr> gnss_twist_queue_;
+
+    geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr last_lidar_pose_msg_;
+    geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr last_gnss_pose_msg_;
+    geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr last_lidar_twist_msg_;
+    geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr last_gnss_twist_msg_;
+};
+
+int main(int argc, char *argv[])
+{
+    rclcpp::init(argc, argv);
+    auto node = std::make_shared<PoseFusionNode>();
+
+    rclcpp::spin(node);
+    rclcpp::shutdown();
+    return 0;
+}
